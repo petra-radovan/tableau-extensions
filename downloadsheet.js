@@ -15,41 +15,71 @@ $(document).ready(function () {
   const LOGO_PATH = "./awcl logo.png";
   const LOGO_SCALE_PERCENT = 70;
 
-  $status.text("Pokrećem ekstenziju...");
+  setStatus("Pokrećem ekstenziju...\nJS loaded.");
 
-  if (typeof tableau === "undefined") {
-    console.error("tableau is undefined");
-    $status.text("Greška: Tableau Extensions API nije učitan.");
+  if (typeof $ === "undefined") {
+    setStatus("Greška: jQuery nije učitan.");
     return;
   }
 
-  tableau.extensions.initializeAsync({ configure: showConfigure })
+  if (typeof ExcelJS === "undefined") {
+    setStatus("Greška: ExcelJS nije učitan.");
+    return;
+  }
+
+  if (typeof tableau === "undefined") {
+    setStatus("Greška: Tableau Extensions API nije učitan.");
+    console.error("tableau is undefined");
+    return;
+  }
+
+  setStatus("Tableau Extensions API je učitan.\nPokrećem initializeAsync...");
+
+  tableau.extensions.initializeAsync()
     .then(function () {
       console.log("Tableau initialized successfully");
+
+      if (
+        !tableau.extensions ||
+        !tableau.extensions.dashboardContent ||
+        !tableau.extensions.dashboardContent.dashboard
+      ) {
+        setStatus("Greška: initializeAsync je prošao, ali dashboardContent nije dostupan.");
+        return;
+      }
 
       dashboard = tableau.extensions.dashboardContent.dashboard;
       worksheets = dashboard.worksheets || [];
 
+      console.log("Dashboard:", dashboard);
+      console.log("Worksheets:", worksheets);
+
       if (!worksheets.length) {
         $worksheetSelect.html('<option value="">Nema worksheetova</option>');
         $downloadBtn.prop("disabled", true);
-        $status.text("Nema worksheetova u ovom dashboardu.");
+
+        setStatus(
+          "Ekstenzija je inicijalizirana, ali ne vidi worksheetove.\n" +
+          "Dashboard: " + safeText(dashboard.name) + "\n" +
+          "Worksheet count: 0"
+        );
         return;
       }
 
       populateWorksheetDropdown(worksheets);
       $downloadBtn.prop("disabled", false);
 
-      $status.text(
+      setStatus(
         "Ekstenzija je uspješno pokrenuta.\n" +
-        "Dashboard: " + dashboard.name + "\n" +
-        "Odaberi worksheet i klikni 'Preuzmi XLSX'."
+        "Dashboard: " + safeText(dashboard.name) + "\n" +
+        "Worksheet count: " + worksheets.length + "\n" +
+        "Worksheetovi: " + worksheets.map(function (w) { return w.name; }).join(", ")
       );
     })
     .catch(function (err) {
       const errorText = getErrorText(err);
       console.error("Tableau extension init error:", err);
-      $status.text("Inicijalizacija nije uspjela: " + errorText);
+      setStatus("Inicijalizacija nije uspjela:\n" + errorText);
       $downloadBtn.prop("disabled", true);
     });
 
@@ -57,14 +87,14 @@ $(document).ready(function () {
     const selectedWorksheetName = $worksheetSelect.val();
 
     if (!selectedWorksheetName) {
-      $status.text("Najprije odaberi worksheet.");
+      setStatus("Najprije odaberi worksheet.");
       return;
     }
 
     const worksheet = findWorksheetByName(selectedWorksheetName);
 
     if (!worksheet) {
-      $status.text("Odabrani worksheet nije pronađen.");
+      setStatus("Odabrani worksheet nije pronađen.");
       return;
     }
 
@@ -75,11 +105,6 @@ $(document).ready(function () {
       $downloadBtn.prop("disabled", false);
     }
   });
-
-  function showConfigure() {
-    console.log("Configure clicked");
-    $status.text("Kliknuto je Configure.");
-  }
 
   function populateWorksheetDropdown(worksheetList) {
     $worksheetSelect.empty();
@@ -100,17 +125,17 @@ $(document).ready(function () {
   }
 
   async function downloadWorksheetAsXlsx(worksheet) {
-    $status.text("Dohvaćam podatke za worksheet: " + worksheet.name + "...");
+    setStatus("Dohvaćam podatke za worksheet: " + worksheet.name + "...");
 
     try {
       const dataTable = await worksheet.getSummaryDataAsync();
 
       if (!dataTable || !dataTable.columns || !dataTable.data) {
-        $status.text("Worksheet nema dostupne podatke za export.");
+        setStatus("Worksheet nema dostupne podatke za export.");
         return;
       }
 
-      $status.text("Generiram XLSX datoteku...");
+      setStatus("Generiram XLSX datoteku...");
 
       const workbook = new ExcelJS.Workbook();
       workbook.creator = "Tableau Extension";
@@ -157,7 +182,6 @@ $(document).ready(function () {
       });
 
       autoFitColumns(excelSheet, headers);
-
       excelSheet.views = [{ state: "frozen", ySplit: 1 }];
 
       let logoInserted = false;
@@ -214,11 +238,11 @@ $(document).ready(function () {
       }
 
       const xlsxBuffer = await workbook.xlsx.writeBuffer();
-
       const fileName = sanitizeFileName(worksheet.name) + ".xlsx";
+
       triggerXlsxDownload(xlsxBuffer, fileName);
 
-      $status.text(
+      setStatus(
         "Preuzimanje je pokrenuto.\n" +
         "Worksheet: " + worksheet.name + "\n" +
         "Redaka: " + dataTable.data.length + "\n" +
@@ -228,7 +252,7 @@ $(document).ready(function () {
     } catch (err) {
       const errorText = getErrorText(err);
       console.error("Error creating XLSX:", err);
-      $status.text(
+      setStatus(
         "Greška pri generiranju XLSX datoteke za worksheet '" +
         worksheet.name +
         "': " +
@@ -425,5 +449,16 @@ $(document).ready(function () {
     } catch (jsonError) {
       return "Unserializable error";
     }
+  }
+
+  function setStatus(text) {
+    $status.text(text);
+  }
+
+  function safeText(value) {
+    if (value === null || value === undefined) {
+      return "";
+    }
+    return String(value);
   }
 });
