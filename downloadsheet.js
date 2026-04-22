@@ -12,9 +12,9 @@ $(document).ready(function () {
   let dashboard = null;
   let worksheets = [];
 
-  const LOGO_PATH = "./awcl logo.png";
+  const LOGO_PATH = "./awcl_logo.png";
   const LOGO_SCALE_PERCENT = 70;
-  const EMAIL_API_URL = "https://YOUR-BACKEND-URL/send-export-email";
+  const EMAIL_API_URL = "http://192.168.129.30:3000/send-export-email";
 
   setStatus("Pokrećem ekstenziju...");
 
