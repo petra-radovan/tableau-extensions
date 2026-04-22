@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Download Sheet XLSX Extension</title>
+
+  <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+  <script src="../../../lib/tableau.extensions.1.latest.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
+  <script src="./downloadsheet.js"></script>
+
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 16px;
+      margin: 0;
+      background: #ffffff;
+    }
+
+    h3 {
+      margin-top: 0;
+      margin-bottom: 12px;
+    }
+
+    .card {
+      border: 1px solid #d0d0d0;
+      padding: 16px;
+      background: #fafafa;
+    }
+
+    .row {
+      margin-bottom: 12px;
+    }
+
+    label {
+      display: block;
+      margin-bottom: 6px;
+      font-weight: bold;
+    }
+
+    select, button {
+      width: 100%;
+      padding: 10px;
+      font-size: 14px;
+      box-sizing: border-box;
+    }
+
+    button {
+      cursor: pointer;
+    }
+
+    #status {
+      margin-top: 12px;
+      padding: 10px;
+      border: 1px solid #ddd;
+      background: #fff;
+      min-height: 56px;
+      white-space: pre-line;
+    }
+
+    .small {
+      color: #666;
+      font-size: 12px;
+      margin-top: 8px;
+      line-height: 1.4;
+    }
+  </style>
+</head>
+<body>
+  <h3>Download Sheet as XLSX</h3>
+
+  <div class="card">
+    <div class="row">
+      <label for="worksheetSelect">Odaberi worksheet</label>
+      <select id="worksheetSelect">
+        <option value="">Učitavanje worksheetova...</option>
+      </select>
+    </div>
+
+    <div class="row">
+      <button id="downloadBtn" disabled>Preuzmi XLSX</button>
+    </div>
+
+    <div id="status">Čekam Tableau inicijalizaciju...</div>
+
+    <div class="small">
+      Generira se .xlsx datoteka iz summary data odabranog worksheeta.<br>
+      Headeri su boldani sa žutom pozadinom, kolone se šire prema sadržaju,
+      a logo se pokušava umetnuti na poziciju G8.
+    </div>
+  </div>
+</body>
+</html>
