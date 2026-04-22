@@ -1,6 +1,6 @@
 "use strict";
 
-console.log("downloadsheetxlsx.js loaded");
+console.log("downloadsheet.js loaded");
 
 $(document).ready(function () {
   console.log("document ready");
@@ -13,9 +13,15 @@ $(document).ready(function () {
   let worksheets = [];
 
   const LOGO_PATH = "./awcl logo.png";
-  const LOGO_SCALE_PERCENT = 70; // 1-100, default 70
+  const LOGO_SCALE_PERCENT = 70;
 
   $status.text("Pokrećem ekstenziju...");
+
+  if (typeof tableau === "undefined") {
+    console.error("tableau is undefined");
+    $status.text("Greška: Tableau Extensions API nije učitan.");
+    return;
+  }
 
   tableau.extensions.initializeAsync({ configure: showConfigure })
     .then(function () {
@@ -152,9 +158,7 @@ $(document).ready(function () {
 
       autoFitColumns(excelSheet, headers);
 
-      excelSheet.views = [
-        { state: "frozen", ySplit: 1 }
-      ];
+      excelSheet.views = [{ state: "frozen", ySplit: 1 }];
 
       let logoInserted = false;
 
@@ -197,7 +201,7 @@ $(document).ready(function () {
         });
 
         excelSheet.addImage(imageId, {
-          tl: { col: 6, row: 7 }, // G8 (zero-based)
+          tl: { col: 6, row: 7 },
           ext: {
             width: finalWidth,
             height: finalHeight
@@ -233,7 +237,7 @@ $(document).ready(function () {
     }
   }
 
-  function convertCellValue(cell, columnMeta) {
+  function convertCellValue(cell) {
     if (!cell) {
       return "";
     }
@@ -274,9 +278,7 @@ $(document).ready(function () {
     const columnName = (columnMeta && (columnMeta.fieldName || columnMeta.caption) || "")
       .toLowerCase();
 
-    cell.alignment = {
-      vertical: "middle"
-    };
+    cell.alignment = { vertical: "middle" };
 
     if (typeof cell.value === "number") {
       cell.alignment.horizontal = "right";
@@ -293,11 +295,13 @@ $(document).ready(function () {
   }
 
   function isPercentageColumn(columnName, value) {
-    if (columnName.includes("%") ||
-        columnName.includes("percent") ||
-        columnName.includes("pct") ||
-        columnName.includes("ratio") ||
-        columnName.includes("total")) {
+    if (
+      columnName.includes("%") ||
+      columnName.includes("percent") ||
+      columnName.includes("pct") ||
+      columnName.includes("ratio") ||
+      columnName.includes("total")
+    ) {
       return true;
     }
 
