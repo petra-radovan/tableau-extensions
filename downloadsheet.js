@@ -14,8 +14,8 @@ $(document).ready(function () {
 
   const LOGO_PATH = "./awcl_logo.png";
   const LOGO_SCALE_PERCENT = 70;
-  const EMAIL_API_URL = "http://192.168.129.30:3000/send-export-email";
-
+  const EMAIL_API_URL = "https://tableausendexport.global-mmk.com/send-export-email";
+  
   setStatus("Pokrećem ekstenziju...");
 
   if (typeof $ === "undefined") {
