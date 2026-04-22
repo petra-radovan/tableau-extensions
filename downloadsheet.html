@@ -39,7 +39,7 @@
       font-weight: bold;
     }
 
-    select, button {
+    select, input, button {
       width: 100%;
       padding: 10px;
       font-size: 14px;
@@ -48,6 +48,7 @@
 
     button {
       cursor: pointer;
+      margin-bottom: 8px;
     }
 
     #status {
@@ -82,12 +83,21 @@
       <button id="downloadBtn" disabled>Preuzmi XLSX</button>
     </div>
 
+    <div class="row">
+      <label for="emailInput">Pošalji na email</label>
+      <input id="emailInput" type="email" placeholder="npr. ime@firma.com">
+    </div>
+
+    <div class="row">
+      <button id="sendEmailBtn" disabled>Pošalji mail</button>
+    </div>
+
     <div id="status">Pokrećem ekstenziju...</div>
 
     <div class="small">
       Generira se .xlsx datoteka iz summary data odabranog worksheeta.
       Headeri su boldani sa žutom pozadinom, kolone se šire prema sadržaju,
-      a logo se pokušava umetnuti na poziciju G8.
+      a logo se pokušava umetnuti na poziciji G8.
     </div>
   </div>
 </body>

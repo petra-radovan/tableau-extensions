@@ -3,10 +3,10 @@
 console.log("downloadsheet.js loaded");
 
 $(document).ready(function () {
-  console.log("document ready");
-
   const $worksheetSelect = $("#worksheetSelect");
   const $downloadBtn = $("#downloadBtn");
+  const $sendEmailBtn = $("#sendEmailBtn");
+  const $emailInput = $("#emailInput");
   const $status = $("#status");
 
   let dashboard = null;
@@ -14,6 +14,7 @@ $(document).ready(function () {
 
   const LOGO_PATH = "./awcl logo.png";
   const LOGO_SCALE_PERCENT = 70;
+  const EMAIL_API_URL = "https://YOUR-BACKEND-URL/send-export-email";
 
   setStatus("Pokrećem ekstenziju...");
 
@@ -29,80 +30,132 @@ $(document).ready(function () {
 
   if (typeof tableau === "undefined") {
     setStatus("Greška: Tableau Extensions API nije učitan.");
-    console.error("tableau is undefined");
     return;
   }
 
   tableau.extensions.initializeAsync()
     .then(function () {
-      console.log("Tableau initialized successfully");
-
-      if (
-        !tableau.extensions ||
-        !tableau.extensions.dashboardContent ||
-        !tableau.extensions.dashboardContent.dashboard
-      ) {
-        setStatus("Greška: initializeAsync je prošao, ali dashboardContent nije dostupan.");
-        return;
-      }
-
       dashboard = tableau.extensions.dashboardContent.dashboard;
       worksheets = dashboard.worksheets || [];
-
-      console.log("Dashboard:", dashboard);
-      console.log("Worksheets:", worksheets);
 
       if (!worksheets.length) {
         $worksheetSelect.html('<option value="">Nema worksheetova</option>');
         $downloadBtn.prop("disabled", true);
-
-        setStatus(
-          "Ekstenzija je inicijalizirana, ali ne vidi worksheetove.\n" +
-          "Dashboard: " + safeText(dashboard.name) + "\n" +
-          "Worksheet count: 0"
-        );
+        $sendEmailBtn.prop("disabled", true);
+        setStatus("Ekstenzija je inicijalizirana, ali ne vidi worksheetove.");
         return;
       }
 
       populateWorksheetDropdown(worksheets);
       $downloadBtn.prop("disabled", false);
+      $sendEmailBtn.prop("disabled", false);
 
       setStatus(
         "Ekstenzija je uspješno pokrenuta.\n" +
         "Dashboard: " + safeText(dashboard.name) + "\n" +
-        "Worksheet count: " + worksheets.length + "\n" +
-        "Odaberi worksheet i klikni 'Preuzmi XLSX'."
+        "Odaberi worksheet pa preuzmi ili pošalji mail."
       );
     })
     .catch(function (err) {
-      const errorText = getErrorText(err);
-      console.error("Tableau extension init error:", err);
-      setStatus("Inicijalizacija nije uspjela:\n" + errorText);
+      setStatus("Inicijalizacija nije uspjela:\n" + getErrorText(err));
       $downloadBtn.prop("disabled", true);
+      $sendEmailBtn.prop("disabled", true);
     });
 
   $downloadBtn.on("click", async function () {
-    const selectedWorksheetName = $worksheetSelect.val();
+    const worksheet = getSelectedWorksheet();
+    if (!worksheet) return;
 
-    if (!selectedWorksheetName) {
-      setStatus("Najprije odaberi worksheet.");
+    try {
+      toggleButtons(true);
+      const result = await buildWorkbookBuffer(worksheet);
+      triggerXlsxDownload(result.buffer, result.fileName);
+
+      setStatus(
+        "Preuzimanje je pokrenuto.\n" +
+        "Worksheet: " + worksheet.name + "\n" +
+        "Datoteka: " + result.fileName
+      );
+    } catch (err) {
+      setStatus("Greška pri downloadu:\n" + getErrorText(err));
+    } finally {
+      toggleButtons(false);
+    }
+  });
+
+  $sendEmailBtn.on("click", async function () {
+    const worksheet = getSelectedWorksheet();
+    if (!worksheet) return;
+
+    const email = String($emailInput.val() || "").trim();
+
+    if (!email) {
+      setStatus("Upiši email adresu.");
       return;
     }
 
-    const worksheet = findWorksheetByName(selectedWorksheetName);
-
-    if (!worksheet) {
-      setStatus("Odabrani worksheet nije pronađen.");
+    if (!isValidEmail(email)) {
+      setStatus("Email adresa nije valjana.");
       return;
     }
 
     try {
-      $downloadBtn.prop("disabled", true);
-      await downloadWorksheetAsXlsx(worksheet);
+      toggleButtons(true);
+      setStatus("Generiram XLSX i šaljem mail...");
+
+      const result = await buildWorkbookBuffer(worksheet);
+      const base64File = arrayBufferToBase64(result.buffer);
+
+      const response = await fetch(EMAIL_API_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          to: email,
+          subject: "Tableau export - " + worksheet.name,
+          body: "U prilogu je XLSX export za worksheet: " + worksheet.name,
+          fileName: result.fileName,
+          fileBase64: base64File
+        })
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error("Backend error: " + text);
+      }
+
+      setStatus(
+        "Mail je uspješno poslan.\n" +
+        "Primatelj: " + email + "\n" +
+        "Worksheet: " + worksheet.name
+      );
+    } catch (err) {
+      setStatus("Greška pri slanju maila:\n" + getErrorText(err));
     } finally {
-      $downloadBtn.prop("disabled", false);
+      toggleButtons(false);
     }
   });
+
+  function getSelectedWorksheet() {
+    const selectedWorksheetName = $worksheetSelect.val();
+
+    if (!selectedWorksheetName) {
+      setStatus("Najprije odaberi worksheet.");
+      return null;
+    }
+
+    const worksheet = worksheets.find(function (w) {
+      return w.name === selectedWorksheetName;
+    });
+
+    if (!worksheet) {
+      setStatus("Odabrani worksheet nije pronađen.");
+      return null;
+    }
+
+    return worksheet;
+  }
 
   function populateWorksheetDropdown(worksheetList) {
     $worksheetSelect.empty();
@@ -116,129 +169,91 @@ $(document).ready(function () {
     });
   }
 
-  function findWorksheetByName(name) {
-    return worksheets.find(function (worksheet) {
-      return worksheet.name === name;
+  async function buildWorkbookBuffer(worksheet) {
+    const dataTable = await worksheet.getSummaryDataAsync();
+
+    if (!dataTable || !dataTable.columns || !dataTable.data) {
+      throw new Error("Worksheet nema dostupne podatke za export.");
+    }
+
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = "Tableau Extension";
+    workbook.created = new Date();
+
+    const safeSheetName = makeSafeWorksheetName(worksheet.name);
+    const excelSheet = workbook.addWorksheet(safeSheetName);
+
+    const transformed = transformDataForExcel(dataTable);
+
+    excelSheet.addRow(transformed.headers);
+    styleHeaderRow(excelSheet.getRow(1));
+
+    transformed.rows.forEach(function (rowObject) {
+      const excelRow = excelSheet.addRow(
+        transformed.headers.map(function (header) {
+          return rowObject[header];
+        })
+      );
+
+      excelRow.eachCell(function (cell, colNumber) {
+        const headerName = transformed.headers[colNumber - 1];
+        applyExcelFormatting(cell, headerName);
+      });
     });
+
+    autoFitColumns(excelSheet, transformed.headers);
+    excelSheet.views = [{ state: "frozen", ySplit: 1 }];
+
+    await insertLogo(workbook, excelSheet);
+
+    const buffer = await workbook.xlsx.writeBuffer();
+    const fileName = sanitizeFileName(worksheet.name) + ".xlsx";
+
+    return { buffer, fileName };
   }
 
-  async function downloadWorksheetAsXlsx(worksheet) {
-    setStatus("Dohvaćam podatke za worksheet: " + worksheet.name + "...");
-
+  async function insertLogo(workbook, excelSheet) {
     try {
-      const dataTable = await worksheet.getSummaryDataAsync();
+      const logoResponse = await fetch(LOGO_PATH);
 
-      if (!dataTable || !dataTable.columns || !dataTable.data) {
-        setStatus("Worksheet nema dostupne podatke za export.");
-        return;
+      if (!logoResponse.ok) {
+        throw new Error("Logo nije pronađen na putanji: " + LOGO_PATH);
       }
 
-      setStatus("Generiram XLSX datoteku...");
+      const blob = await logoResponse.blob();
 
-      const workbook = new ExcelJS.Workbook();
-      workbook.creator = "Tableau Extension";
-      workbook.created = new Date();
+      const img = new Image();
+      const objectUrl = URL.createObjectURL(blob);
 
-      const safeSheetName = makeSafeWorksheetName(worksheet.name);
-      const excelSheet = workbook.addWorksheet(safeSheetName);
-
-      const transformed = transformDataForExcel(dataTable);
-
-      excelSheet.addRow(transformed.headers);
-
-      const headerRow = excelSheet.getRow(1);
-      styleHeaderRow(headerRow);
-
-      transformed.rows.forEach(function (rowObject) {
-        const excelRow = excelSheet.addRow(
-          transformed.headers.map(function (header) {
-            return rowObject[header];
-          })
-        );
-
-        excelRow.eachCell(function (cell, colNumber) {
-          const headerName = transformed.headers[colNumber - 1];
-          applyExcelFormatting(cell, headerName);
-        });
+      const dimensions = await new Promise(function (resolve, reject) {
+        img.onload = function () {
+          resolve({ width: img.width, height: img.height });
+        };
+        img.onerror = reject;
+        img.src = objectUrl;
       });
 
-      autoFitColumns(excelSheet, transformed.headers);
-      excelSheet.views = [{ state: "frozen", ySplit: 1 }];
+      URL.revokeObjectURL(objectUrl);
 
-      let logoInserted = false;
+      const scalePercent = Math.max(1, Math.min(100, LOGO_SCALE_PERCENT));
+      const scaleFactor = scalePercent / 100;
 
-      try {
-        const logoResponse = await fetch(LOGO_PATH);
+      const finalWidth = Math.round(dimensions.width * scaleFactor);
+      const finalHeight = Math.round(dimensions.height * scaleFactor);
 
-        if (!logoResponse.ok) {
-          throw new Error("Logo nije pronađen na putanji: " + LOGO_PATH);
-        }
+      const arrayBuffer = await blob.arrayBuffer();
 
-        const blob = await logoResponse.blob();
+      const imageId = workbook.addImage({
+        buffer: arrayBuffer,
+        extension: "png"
+      });
 
-        const img = new Image();
-        const objectUrl = URL.createObjectURL(blob);
-
-        const dimensions = await new Promise(function (resolve, reject) {
-          img.onload = function () {
-            resolve({
-              width: img.width,
-              height: img.height
-            });
-          };
-          img.onerror = reject;
-          img.src = objectUrl;
-        });
-
-        URL.revokeObjectURL(objectUrl);
-
-        const scalePercent = Math.max(1, Math.min(100, LOGO_SCALE_PERCENT));
-        const scaleFactor = scalePercent / 100;
-
-        const finalWidth = Math.round(dimensions.width * scaleFactor);
-        const finalHeight = Math.round(dimensions.height * scaleFactor);
-
-        const arrayBuffer = await blob.arrayBuffer();
-
-        const imageId = workbook.addImage({
-          buffer: arrayBuffer,
-          extension: "png"
-        });
-
-        excelSheet.addImage(imageId, {
-          tl: { col: 6, row: 7 },
-          ext: {
-            width: finalWidth,
-            height: finalHeight
-          }
-        });
-
-        logoInserted = true;
-      } catch (logoError) {
-        console.warn("Logo could not be inserted:", logoError);
-      }
-
-      const xlsxBuffer = await workbook.xlsx.writeBuffer();
-      const fileName = sanitizeFileName(worksheet.name) + ".xlsx";
-
-      triggerXlsxDownload(xlsxBuffer, fileName);
-
-      setStatus(
-        "Preuzimanje je pokrenuto.\n" +
-        "Worksheet: " + worksheet.name + "\n" +
-        "Redaka: " + transformed.rows.length + "\n" +
-        "Datoteka: " + fileName + "\n" +
-        "Logo umetnut: " + (logoInserted ? "da" : "ne")
-      );
+      excelSheet.addImage(imageId, {
+        tl: { col: 6, row: 7 },
+        ext: { width: finalWidth, height: finalHeight }
+      });
     } catch (err) {
-      const errorText = getErrorText(err);
-      console.error("Error creating XLSX:", err);
-      setStatus(
-        "Greška pri generiranju XLSX datoteke za worksheet '" +
-        worksheet.name +
-        "': " +
-        errorText
-      );
+      console.warn("Logo nije umetnut:", err);
     }
   }
 
@@ -255,18 +270,13 @@ $(document).ready(function () {
 
     const rows = (dataTable.data || []).map(function (row) {
       const result = {};
-
       headers.forEach(function (header, colIndex) {
         result[header] = convertCellValue(row[colIndex]);
       });
-
       return result;
     });
 
-    return {
-      headers: headers,
-      rows: rows
-    };
+    return { headers, rows };
   }
 
   function pivotMeasureNamesData(dataTable) {
@@ -334,10 +344,7 @@ $(document).ready(function () {
     const headers = dimensionHeaders.concat(discoveredMeasureHeaders);
     const rows = Array.from(rowMap.values());
 
-    return {
-      headers: headers,
-      rows: rows
-    };
+    return { headers, rows };
   }
 
   function styleHeaderRow(headerRow) {
@@ -360,9 +367,7 @@ $(document).ready(function () {
   }
 
   function convertCellValue(cell) {
-    if (!cell) {
-      return "";
-    }
+    if (!cell) return "";
 
     const formatted = typeof cell.formattedValue !== "undefined" && cell.formattedValue !== null
       ? String(cell.formattedValue).trim()
@@ -439,10 +444,7 @@ $(document).ready(function () {
     }
 
     let text = String(input).trim();
-
-    if (!text) {
-      return null;
-    }
+    if (!text) return null;
 
     text = text.replace(/\s/g, "");
 
@@ -461,12 +463,7 @@ $(document).ready(function () {
     }
 
     const parsed = Number(text);
-
-    if (Number.isFinite(parsed)) {
-      return parsed;
-    }
-
-    return null;
+    return Number.isFinite(parsed) ? parsed : null;
   }
 
   function autoFitColumns(excelSheet, headers) {
@@ -478,11 +475,9 @@ $(document).ready(function () {
 
       column.eachCell({ includeEmpty: true }, function (cell) {
         let cellValue = "";
-
         if (cell.value !== null && cell.value !== undefined) {
           cellValue = String(cell.value);
         }
-
         maxLength = Math.max(maxLength, cellValue.length);
       });
 
@@ -508,6 +503,28 @@ $(document).ready(function () {
     URL.revokeObjectURL(blobUrl);
   }
 
+  function arrayBufferToBase64(buffer) {
+    let binary = "";
+    const bytes = new Uint8Array(buffer);
+    const chunkSize = 0x8000;
+
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      const chunk = bytes.subarray(i, i + chunkSize);
+      binary += String.fromCharCode.apply(null, chunk);
+    }
+
+    return btoa(binary);
+  }
+
+  function isValidEmail(email) {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+  }
+
+  function toggleButtons(disabled) {
+    $downloadBtn.prop("disabled", disabled);
+    $sendEmailBtn.prop("disabled", disabled);
+  }
+
   function makeSafeWorksheetName(name) {
     let safeName = String(name)
       .replace(/[\\/*?:[\]]/g, "_")
@@ -529,17 +546,9 @@ $(document).ready(function () {
   }
 
   function getErrorText(err) {
-    if (!err) {
-      return "Unknown error";
-    }
-
-    if (typeof err === "string") {
-      return err;
-    }
-
-    if (err.message) {
-      return err.message;
-    }
+    if (!err) return "Unknown error";
+    if (typeof err === "string") return err;
+    if (err.message) return err.message;
 
     try {
       return JSON.stringify(err);
@@ -553,9 +562,7 @@ $(document).ready(function () {
   }
 
   function safeText(value) {
-    if (value === null || value === undefined) {
-      return "";
-    }
+    if (value === null || value === undefined) return "";
     return String(value);
   }
 });
