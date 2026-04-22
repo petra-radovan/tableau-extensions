@@ -15,7 +15,7 @@ $(document).ready(function () {
   const LOGO_PATH = "./awcl logo.png";
   const LOGO_SCALE_PERCENT = 70;
 
-  setStatus("Pokrećem ekstenziju...\nJS loaded.");
+  setStatus("Pokrećem ekstenziju...");
 
   if (typeof $ === "undefined") {
     setStatus("Greška: jQuery nije učitan.");
@@ -32,8 +32,6 @@ $(document).ready(function () {
     console.error("tableau is undefined");
     return;
   }
-
-  setStatus("Tableau Extensions API je učitan.\nPokrećem initializeAsync...");
 
   tableau.extensions.initializeAsync()
     .then(function () {
@@ -73,7 +71,7 @@ $(document).ready(function () {
         "Ekstenzija je uspješno pokrenuta.\n" +
         "Dashboard: " + safeText(dashboard.name) + "\n" +
         "Worksheet count: " + worksheets.length + "\n" +
-        "Worksheetovi: " + worksheets.map(function (w) { return w.name; }).join(", ")
+        "Odaberi worksheet i klikni 'Preuzmi XLSX'."
       );
     })
     .catch(function (err) {
@@ -144,44 +142,27 @@ $(document).ready(function () {
       const safeSheetName = makeSafeWorksheetName(worksheet.name);
       const excelSheet = workbook.addWorksheet(safeSheetName);
 
-      const headers = (dataTable.columns || []).map(function (column, index) {
-        return column.fieldName || column.caption || ("Column " + (index + 1));
-      });
+      const transformed = transformDataForExcel(dataTable);
 
-      excelSheet.addRow(headers);
+      excelSheet.addRow(transformed.headers);
 
       const headerRow = excelSheet.getRow(1);
-      headerRow.font = { bold: true };
-      headerRow.fill = {
-        type: "pattern",
-        pattern: "solid",
-        fgColor: { argb: "FFFF00" }
-      };
-      headerRow.alignment = {
-        vertical: "middle",
-        horizontal: "center"
-      };
-      headerRow.border = {
-        top: { style: "thin", color: { argb: "FF000000" } },
-        left: { style: "thin", color: { argb: "FF000000" } },
-        bottom: { style: "thin", color: { argb: "FF000000" } },
-        right: { style: "thin", color: { argb: "FF000000" } }
-      };
+      styleHeaderRow(headerRow);
 
-      (dataTable.data || []).forEach(function (row) {
+      transformed.rows.forEach(function (rowObject) {
         const excelRow = excelSheet.addRow(
-          row.map(function (cell, colIndex) {
-            return convertCellValue(cell, dataTable.columns[colIndex]);
+          transformed.headers.map(function (header) {
+            return rowObject[header];
           })
         );
 
         excelRow.eachCell(function (cell, colNumber) {
-          const columnMeta = dataTable.columns[colNumber - 1];
-          applyExcelFormatting(cell, columnMeta);
+          const headerName = transformed.headers[colNumber - 1];
+          applyExcelFormatting(cell, headerName);
         });
       });
 
-      autoFitColumns(excelSheet, headers);
+      autoFitColumns(excelSheet, transformed.headers);
       excelSheet.views = [{ state: "frozen", ySplit: 1 }];
 
       let logoInserted = false;
@@ -245,7 +226,7 @@ $(document).ready(function () {
       setStatus(
         "Preuzimanje je pokrenuto.\n" +
         "Worksheet: " + worksheet.name + "\n" +
-        "Redaka: " + dataTable.data.length + "\n" +
+        "Redaka: " + transformed.rows.length + "\n" +
         "Datoteka: " + fileName + "\n" +
         "Logo umetnut: " + (logoInserted ? "da" : "ne")
       );
@@ -259,6 +240,123 @@ $(document).ready(function () {
         errorText
       );
     }
+  }
+
+  function transformDataForExcel(dataTable) {
+    const pivoted = pivotMeasureNamesData(dataTable);
+
+    if (pivoted) {
+      return pivoted;
+    }
+
+    const headers = (dataTable.columns || []).map(function (column, index) {
+      return column.fieldName || column.caption || ("Column " + (index + 1));
+    });
+
+    const rows = (dataTable.data || []).map(function (row) {
+      const result = {};
+
+      headers.forEach(function (header, colIndex) {
+        result[header] = convertCellValue(row[colIndex]);
+      });
+
+      return result;
+    });
+
+    return {
+      headers: headers,
+      rows: rows
+    };
+  }
+
+  function pivotMeasureNamesData(dataTable) {
+    const columnNames = (dataTable.columns || []).map(function (column, index) {
+      return column.fieldName || column.caption || ("Column " + (index + 1));
+    });
+
+    const measureNameIndex = columnNames.findIndex(function (name) {
+      return String(name).toLowerCase().includes("measure names");
+    });
+
+    const measureValueIndex = columnNames.findIndex(function (name) {
+      return String(name).toLowerCase().includes("measure values");
+    });
+
+    if (measureNameIndex === -1 || measureValueIndex === -1) {
+      return null;
+    }
+
+    const dimensionHeaders = columnNames.filter(function (_, index) {
+      return index !== measureNameIndex && index !== measureValueIndex;
+    });
+
+    const rowMap = new Map();
+    const discoveredMeasureHeaders = [];
+
+    (dataTable.data || []).forEach(function (row) {
+      const measureNameCell = row[measureNameIndex];
+      const measureValueCell = row[measureValueIndex];
+
+      const measureName = measureNameCell && measureNameCell.formattedValue
+        ? String(measureNameCell.formattedValue)
+        : "Measure";
+
+      if (!discoveredMeasureHeaders.includes(measureName)) {
+        discoveredMeasureHeaders.push(measureName);
+      }
+
+      const dimensionValues = [];
+      const baseObject = {};
+
+      columnNames.forEach(function (header, index) {
+        if (index !== measureNameIndex && index !== measureValueIndex) {
+          const value = row[index] && row[index].formattedValue !== undefined
+            ? row[index].formattedValue
+            : row[index] && row[index].value !== undefined
+              ? row[index].value
+              : "";
+
+          dimensionValues.push(String(value));
+          baseObject[header] = value;
+        }
+      });
+
+      const key = dimensionValues.join("||");
+
+      if (!rowMap.has(key)) {
+        rowMap.set(key, baseObject);
+      }
+
+      const targetRow = rowMap.get(key);
+      targetRow[measureName] = convertCellValue(measureValueCell);
+    });
+
+    const headers = dimensionHeaders.concat(discoveredMeasureHeaders);
+    const rows = Array.from(rowMap.values());
+
+    return {
+      headers: headers,
+      rows: rows
+    };
+  }
+
+  function styleHeaderRow(headerRow) {
+    headerRow.font = { bold: true };
+    headerRow.fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FFFF00" }
+    };
+    headerRow.alignment = {
+      vertical: "middle",
+      horizontal: "center"
+    };
+    headerRow.border = {
+      top: { style: "thin", color: { argb: "FF000000" } },
+      left: { style: "thin", color: { argb: "FF000000" } },
+      bottom: { style: "thin", color: { argb: "FF000000" } },
+      right: { style: "thin", color: { argb: "FF000000" } }
+    };
   }
 
   function convertCellValue(cell) {
@@ -298,9 +396,8 @@ $(document).ready(function () {
     return rawValue;
   }
 
-  function applyExcelFormatting(cell, columnMeta) {
-    const columnName = (columnMeta && (columnMeta.fieldName || columnMeta.caption) || "")
-      .toLowerCase();
+  function applyExcelFormatting(cell, headerName) {
+    const columnName = String(headerName || "").toLowerCase();
 
     cell.alignment = { vertical: "middle" };
 
